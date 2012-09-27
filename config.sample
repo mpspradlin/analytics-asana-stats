@@ -1,0 +1,47 @@
+asana_api_key: "SECRET STRING"
+reports:
+    reporta:
+        name: "Analytics Weekly Update"
+        report_type: team
+        frequency: weekly
+        time_frame: "last week"
+        output:
+            email:
+                recipients: 
+                - dvanliere@wikimedia.org 
+                - dsc@wikimedia.org 
+                - hfung@wikimedia.org 
+                - robla@wikimedia.org
+                - aotto@wikimedia.org
+                sender: 
+                     email: dvanliere@wikimedia.org
+                     name: Diederik
+                server:
+                    host: localhost
+                    username: foo
+                    password: bar
+                    port: 587
+
+            wiki:
+                url: http://
+                username: foo
+                password: bar
+        ignore_projects: 
+        - nourishment 
+        - "Misc Evan"
+        ignore_devs: ""
+
+    reportb:
+        name: Another example
+        report_type: personal
+        frequency: monthly
+        time_frame: "last month"
+        output:
+            wiki:
+                url: http://
+                username: foo
+                password: bar
+        ignore_projects: 
+        - nourishment 
+        - "Misc Evan"
+        ignore_devs: ""
