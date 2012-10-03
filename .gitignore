@@ -1,0 +1,6 @@
+.settings/
+*.pyc
+config.yaml
+.project
+.pydevproject
+pyasana.bak

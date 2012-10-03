@@ -1,8 +1,7 @@
-asana_api_key: "SECRET STRING"
+asana_api_key: "EMPTY STRING"
 reports:
     reporta:
         name: "Analytics Weekly Update"
-        report_type: team
         frequency: weekly
         time_frame: "last week"
         output:
@@ -13,35 +12,46 @@ reports:
                 - hfung@wikimedia.org 
                 - robla@wikimedia.org
                 - aotto@wikimedia.org
+                - ezachte@wikimedia.org
                 sender: 
                      email: dvanliere@wikimedia.org
                      name: Diederik
                 server:
-                    host: localhost
-                    username: foo
-                    password: bar
+                    host: smtp.gmail.com    #localhost is valid if sendmail is installed
+                    username: secret
+                    password: secret
                     port: 587
 
             wiki:
-                url: http://
-                username: foo
-                password: bar
+                url: http://www.mediawiki.org/w/api.php
+                username: secret
+                password: secret
+                titles:
+                    test: "User_talk:Drdee/Sandbox"
+                    #kraken: "Analytics/Kraken/status"
+                    #reportcard: "Analytics/Reportcard/status"                    
         ignore_projects: 
         - nourishment 
         - "Misc Evan"
-        ignore_devs: ""
+        team_members: #make sure that these names match the fullname in Asana
+        - "Diederik van Liere" 
+        - "David Schoonover" 
+        - "Andrew Otto"
+        - "Erik Zachte"
 
     reportb:
         name: Another example
-        report_type: personal
         frequency: monthly
         time_frame: "last month"
         output:
             wiki:
-                url: http://
-                username: foo
-                password: bar
+                url: https://office.wikimedia.org/w/api.php
+                username: secret
+                password: secret
+                titles: #cannot be an empty list
+                    test: "User_talk:Dvanliere/Sandbox"
+                    all: "User:Dvanliere/Progress"
         ignore_projects: 
         - nourishment 
         - "Misc Evan"
-        ignore_devs: ""
+        team_members: ""    #cannot be an empty list

@@ -21,17 +21,13 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 import os
 import sys
-import pyasana
 import calendar
 import logging
 import argparse
-import parsedatetime.parsedatetime as pdt
-import parsedatetime.parsedatetime_consts as pdc
+import dateutil.relativedelta
 
-from cStringIO import StringIO
-from datetime import datetime, timedelta
-from time import mktime
-
+import pyasana
+from datetime import datetime, timedelta, date
 from report import Report, Wiki, Email
 
 from yaml import load, dump
@@ -55,7 +51,7 @@ ON_POSIX = 'posix' in sys.builtin_module_names
 class Logger(object):
 	def __init__(self, func):
 		self.func = func
-
+		
 	def __get__(self, obj, cls=None):
 		return self.__class__(self.func.__get__(obj, cls))
 
@@ -77,53 +73,84 @@ class Progress(object):
 		self.asana_api_key = asana_api_key
 		self.output = output.keys()
 		self.verbose = args.verbose
-		self.dryrun = args.dry_run
+		self.dryrun = True	#args.dry_run
 		self.time_frame = time_frame
 		self.format_choices = ['wiki', 'email']
-		self.frequency_choices = ['weekly', 'monthly']	
+		self.frequency_choices = ['weekly', 'monthly']
+		self.number_report = int(args.number_reports)	
 		self.tasks = {}
-		
+		self.create_tasks_dictionary()
 		self.validate_input()
-		self.start_date, self.end_date = self.construct_time_window()
-		self.dt = self.max_age()
-		
+		self.start_date = None
+		self.end_date = None
+		self.set_time_frame()
+		#self.dt = self.max_age()
 		self.init_report_class(output, args)
-
 		self.api = pyasana.Api(self.asana_api_key)
 		self.workspaces = self.api.get_workspaces()
 
 	def init_report_class(self, output, args):
 		count = len(self.output)
-		classes=0
+		classes = 0
 		for op in self.output:
 			for cls in Report.__subclasses__():
 				if cls.is_registrar_for(op):
 					params = output.get(op)
 					params['args'] = args
 					params['output'] = op
+					params['start_date'] = self.start_date
+					params['end_date'] = self.end_date
 					cls = cls(**params)
 					setattr(self, op, cls)
-					classes+=1
+					classes += 1
 		if classes != count:
 			raise ValueError('Could not find all classes to handle output format(s) %s.' % ','.join(self.output))
 			sys.exit(-1)
 	
+	def generate_key(self, start_date, end_date):
+		if not isinstance(start_date, date) or not isinstance(end_date, date):
+			raise Exception('start and end date should be of type date not datetime.')
+		else:
+			return '%s-%s' % (str(start_date), str(end_date))
 
-	def construct_time_window(self):
-		c = pdc.Constants()
-		p = pdt.Calendar(c)
-		result = p.parse(self.time_frame)
-		end_date = datetime.today()
-		start_date = datetime.fromtimestamp(mktime(result[0]))
-		if (end_date.day - start_date.day) > 7:
-			start_date = start_date + timedelta(days=7)
-		return start_date, end_date
+	def set_time_frame(self):
+		self.start_date = min(self.tasks.keys())
+		self.end_date = max(self.tasks.keys())
+
+	def construct_time_window(self, obs_date=date.today(), number=1):
+		if self.frequency == 'weekly':
+			end_date = obs_date - timedelta(days=obs_date.weekday(), weeks=number - 1)
+			start_date = end_date - timedelta(weeks=1)
+		elif self.frequency == 'monthly':
+			prev_date = obs_date - dateutil.relativedelta.relativedelta(months=number)
+			start_date = date(prev_date.year, prev_date.month, 1)
+			number_of_days_in_month = calendar.monthrange(start_date.year, start_date.month)[1]
+			end_date = date(prev_date.year, prev_date.month, number_of_days_in_month)
+		else:
+			raise Exception('Frequency %s is not supported.' % self.frequency)
+			sys.exit(-1)
+		return start_date, end_date	
+		
+	def create_tasks_dictionary(self):
+		for number in xrange(self.number_report):
+			number += 1
+			start_date, end_date = self.construct_time_window(number=number)
+			#key = self.generate_key(start_date, end_date)
+			self.tasks.setdefault(start_date, {})
+
+	def task_finished_during_time_window(self, task):
+		task.completed_at = self.parse_timestamp(task.completed_at)
+		start_date, end_date = self.construct_time_window(task.completed_at)
+		if start_date >= self.start_date and end_date <= self.end_date:
+			return start_date
+		else:
+			return None
 
 	def max_age(self):
 		if self.frequency == 'weekly':
 			return timedelta(days=7)
 		elif self.frequency == 'monthly':
-			number_of_days_in_month = calendar.monthrange(self.start_date.year,self.start_date.month)[1]
+			number_of_days_in_month = calendar.monthrange(self.start_date.year, self.start_date.month)[1]
 			return timedelta(days=number_of_days_in_month)
 
 	def parse_project(self, project):
@@ -133,52 +160,55 @@ class Progress(object):
 		return True
 
 	def is_team_member(self, task):
-		if task.assignee in self.team_members:
+		if task.assignee and task.assignee.name in self.team_members:
 			return True
 		else:
 			return False
 
 	def parse_timestamp(self, timestamp):
 		timestamp = timestamp[:-5]
-		return datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S')
+		timestamp = datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S')
+		return timestamp.date()
 
 	def parse_tasks(self, api, tasks):
-		data = []
+		data = {}
 		for task in tasks:
 			task = api.get_task(task.id)
 			if task.completed:
 				if not task.name.endswith(':'):
-					if self.task_finished_during_time_window(task) == True:
-						data.append(task)
+					key = self.task_finished_during_time_window(task)
+					if key:
+						data.setdefault(key, [])
+						data[key].append(task)
 		return data
 	
 	def run(self):
 		for workspace in self.workspaces:
+			log.info('Workspace: %s' % workspace.name)
 			projects = self.api.get_projects(workspace.id)
+			if self.dryrun:
+				projects = projects[0:4] if len(projects) > 3 else []
+			
 			for project in projects:
+				log.info('Parsing project: %s' % project.name)
 				if self.parse_project(project):
 					tasks = self.api.get_tasks(project=project.id)
 					data = self.parse_tasks(self.api, tasks)
-					if any([self.is_team_member(task) for task in data]):
-						self.tasks.setdefault(project, [])
-					for task in data:
-						if self.is_team_member(task):
-							completed_task = '* %s completed by %s on %s' % (task.name, task.assignee, task.completed_at)
-							self.tasks[project].append(completed_task)
-
+					for date, tasks in data.iteritems():
+						if any([self.is_team_member(task) for task in tasks]):
+							self.tasks[date].setdefault(project, [])
+						for task in tasks:
+							if self.is_team_member(task):
+								completed_task = '* %s completed by %s on %s' % (task.name, task.assignee.name, task.completed_at)
+								log.info('Task: %s' % completed_task)
+								self.tasks[date].setdefault(project, [])
+								self.tasks[date][project].append(completed_task)
 
 	def send(self):
 		for output in self.output:
-				report = getattr(self, output)
-				report.create(self)
+			report = getattr(self, output)
+			report.create(self)
 
-	def task_finished_during_time_window(self, task):
-		task.completed_at = self.parse_timestamp(task.completed_at)
-		if (self.end_date - task.completed_at) < self.dt:
-			return True
-		else:
-			return False
-	
 	def validate_input(self):
 		for output in self.output:
 			if output not in self.format_choices:
@@ -203,6 +233,8 @@ def parse_commandline():
 	parser.add_argument('--config', help='Specify the absolute path to tell asana-stats where it can find the config.yaml file', action='store', required=False, default='~/.asana-stats.yaml')
 	parser.add_argument('--dry_run', help='This won\'t distribute the status update, primarily for debugging purposes', required=False, default=False, action='store_true')
 	parser.add_argument('--verbose', help='Indicate whether to stdout should be turned on.', action='store_true', default=False)
+	parser.add_argument('--number_reports', help='Indicate how far back in time you want to go for generating reports. ', default=1, required=False, action='store')
+	
 	return parser.parse_args()
 
 
@@ -211,11 +243,11 @@ def load_configuration(path):
 		path = os.path.expanduser(path)
 	
 	if os.path.exists(path) and path.endswith('yaml'):
-		fh = open(path,'r')
+		fh = open(path, 'r')
 		configuration = load(fh, Loader=Loader)
 		fh.close()
 	else:
-		raise Exception('Could not load configuration file %s, please make sure that the path is correct.' % (path))
+		raise Exception('Could not load configuration file %s, please make sure that the path is correct and that the extension of the file is yaml.' % (path))
 		sys.exit(-1)
 	return configuration
 
@@ -223,20 +255,19 @@ def load_configuration(path):
 def main():
 	args = parse_commandline()
 	configuration = load_configuration(args.config)
-	reports = [report for report in configuration.get('reports',{}).keys() if report.startswith('report')]
+	reports = [report for report in configuration.get('reports', {}).keys() if report.startswith('report')]
 	for report in reports:
-		settings = configuration.get('reports',{}).get(report)
+		settings = configuration.get('reports', {}).get(report)
 		if settings:
-			print 'Creating report %s' % report
-			settings['output']['email'] = flatten(settings['output'].get('email',{}))
+			log.info('Creating report %s' % report)
+			settings['output']['email'] = flatten(settings['output'].get('email', {}))
 			settings['output']['wiki'] = settings['output'].get('wiki', {})
-			#settings['output']['wiki'] = flatten(settings['output'].get('wiki', {}), dict())
 			settings['asana_api_key'] = configuration.get('asana_api_key')
 			settings['args'] = args
 			progress = Progress(**settings)
 			progress.run() 
 			progress.send()
-			print 'DONE'
+			log.info('Finished creating report %s' % report)
 	
 if __name__ == '__main__':
 	main()

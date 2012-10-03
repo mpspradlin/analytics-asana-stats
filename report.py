@@ -19,21 +19,23 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """
 
-import json
 import sys
 import requests
 import socket
 import smtplib
+import logging
+import pyasana
 
 from functools import partial
 from email.message import Message
 from cStringIO import StringIO
 
+log = logging.getLogger()
 
 def make_heading(fn):
 	def wrapper(*args, **kwargs):
-		format = kwargs.pop('format', None)
-		if format == 'wikitext':
+		output_format = kwargs.pop('format', None)
+		if output_format == 'wikitext':
 			return "==" + fn(*args, **kwargs) + "=="
 		else:						
 			return fn(*args, **kwargs)
@@ -41,37 +43,63 @@ def make_heading(fn):
 
 def make_body(fn):
 	def wrapper(*args, **kwargs):
-		format = kwargs.pop('format', None)
-		if format == 'wikitext':
-			return fn(*args, **kwargs)
+		output_format = kwargs.pop('format', None)
+		if output_format == 'wikitext':
+			output = fn(*args, **kwargs)
+			output = '%s\n' % output
+			return output
 		else:						
 			return fn(*args, **kwargs)
 	return wrapper
 
 
 class Report(object):
-	def __init__(self, username, password, output, args):
+	def __init__(self, username, password, output, args, start_date, end_date):
 		self.username = username
 		self.password = password
 		self.output = output
 		self.dryrun = args.dry_run
 		self.verbose = args.verbose
+		self.start_date = start_date
+		self.end_date = end_date
 		self.data = StringIO()
 
+	def __str__(self):
+		return 'Report for period: %s - %s' % (self.start_date, self.end_date)
+	
 	@make_heading
-	def generate_subject(self, progress):
-		return '%s %s/%s/%s - %s/%s/%s' % (progress.name, progress.start_date.year, progress.start_date.month, progress.start_date.day, progress.end_date.year, progress.end_date.month, progress.end_date.day)
+	def generate_subject(self, progress, project=None):
+		return '%s <%s-%s>' % (progress.name, progress.start_date, progress.end_date)
 	
 	@make_body
-	def write_body(self, tasks):
+	def write_body(self, tasks, project):
+		#self.data.write('\n\n')
+		#self.write_header()
+		for task in tasks:
+			self.data.write('%s\n' % task)
 		self.data.write('\n\n')
-		self.write_header()
-		for project in tasks:
-			self.data.write('%s\n' % project.name)
-			for task in tasks[project]:
-				self.data.write('%s\n' % task)
-		self.data.write('\n\n')
-		self.write_footer()
+		#self.write_footer()
+
+	def create_status(self, progress, project):
+		for date, data in progress.tasks.iteritems():
+			if data.keys() != []:
+				if project == 'All':
+					projects = progress.tasks[date].keys()
+				else:
+					project = pyasana.Project(0, project)
+					projects = [project] if project in progress.tasks[date].keys() else []
+				
+				subject = self.generate_subject(progress, format='wikitext')
+				for project in projects:
+					tasks = data[project]
+					if tasks != []:
+						self.data.write('%s\n' % subject)
+						self.data.write('%s\n' % project.name)
+						self.write_body(tasks, project, format='wikitext')
+		
+		if self.verbose and self.dryrun == False:
+				self.data.seek(0)
+				print self.data.getvalue()
 
 	def write_header(self):
 		fh = open('templates/%s_header.txt' % (self.output), 'r')
@@ -85,8 +113,6 @@ class Report(object):
 			self.data.write(line)
 		fh.close()
 		
-
-
 class Email(Report):
 	def __init__(self, name, email, recipients, host, port, **kwargs):
 		super(Email, self).__init__(**kwargs)
@@ -96,28 +122,31 @@ class Email(Report):
 		self.port = port
 		self.recipients = recipients
 
-
 	def send(self, msg):
 		try:
 			mailer = smtplib.SMTP(self.host, self.port)
 		except socket.error, e:
-			raise Exception('Error initializing SMTP host. If you are using localhost, make sure that sendmail is properly configured.\nError message: %s' % e)
+			error = 'Error initializing SMTP host. If you are using localhost, make sure that sendmail is properly configured.\nError message: %s' % e
+			log.error(error)
+			raise Exception(error)
 			sys.exit(-1)
 		mailer.ehlo()
 		mailer.starttls()
 		mailer.ehlo()
 		
-		if self.dryrun != True:
+		if self.dryrun == False:
 			if self.host != 'localhost':
 				try:
 					mailer.login(self.username, self.password)
 				except smtplib.SMTPAuthenticationError, e:
 					raise Exception('The credentials that you provided for host %s are incorrect.\nError message: %s' % (self.host, e))
 					sys.exit(-1)
-			print 'mailing...'
-			mailer.sendmail('%s <%s>' % (self.name, self.email), msg.as_string())
+			log.info('Emailing report...')
+			#mailer.sendmail('%s <%s>' % (self.name, self.email), self.recipients, msg.as_string())
 		else:
-			print msg.as_string()
+			print 'From: %s <%s>' % (self.name, self.email)
+			print 'To: %s' % ' '.join(self.recipients)
+			print 'Message: %s' % msg.as_string()
 	
 		# Should be mailer.quit(), but that crashes...
 		mailer.close()
@@ -131,7 +160,8 @@ class Email(Report):
 	
 	def create(self, progress):
 		subject = self.generate_subject(progress)
-		self.write_body(progress.tasks)
+		status = self.create_status(progress)
+		#self.write_body(progress.tasks)
 
 		msg = Message()
 		msg.add_header('From', '%s %s' % (self.name, self.email))
@@ -141,9 +171,6 @@ class Email(Report):
 		msg.set_payload(self.data.getvalue())
 		self.send(msg)
 
-		if self.verbose and self.dryrun == False:
-			self.data.seek(0)
-			print self.data.getvalue()
 
 class Wiki(Report):
 	def __init__(self, url, titles, **kwargs):
@@ -163,28 +190,22 @@ class Wiki(Report):
 	def __getattr__(self, attr):
 		return partial(self.api, action=attr)
 
-
 	def create(self, progress):
 		#wiki = Wiki(credentials.get('username'), credentials.get('password'), credentials.get('base_url'))
-		subject = self.generate_subject(progress, format='wikitext')
-		self.data.write(subject)
-		self.write_body(progress.tasks, format='wikitext')
-		status = self.data.getvalue()
-		
-		if self.verbose and self.dryrun == False:
-			self.data.seek(0)
-			print self.data.getvalue()
-		
 		self.login()
 		for project, title in self.titles.iteritems():
-			self.query(titles=title, prop='info|revisions', intoken='edit')
-			if self.dryrun != True:
-				self.edit(title=title, section=0, summary=subject, sectiontitle='', text=status, token=self.edittoken)
+			subject = self.generate_subject(progress, project)
+			self.create_status(progress, project)
+			
+			if self.dryrun != False:
+				if self.data.getvalue() != '':
+					self.query(titles=title, prop='info|revisions', intoken='edit')
+					self.edit(title=title, section=0, summary=subject, sectiontitle='', text=self.data.getvalue(), token=self.edittoken)
 			else:
 				print 'Title: %s' % title
 				print 'Summary: %s' % subject
-				print 'Text: %s' % status	 
-		
+				print 'Text: %s' % self.data.getvalue()	 
+				
 		#wiki.login()
 		#wiki.query(titles=credentials.get('title').get('all'), prop='info|revisions', intoken='edit')
 		#wiki.edit(title=credentials.get('title').get('all'), section=0, summary=subject, sectiontitle='', text=msg, token=wiki.edittoken)
