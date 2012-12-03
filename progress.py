@@ -28,13 +28,13 @@ import dateutil.relativedelta
 
 import pyasana
 from datetime import datetime, timedelta, date
-from report import Report, Wiki, Email
+from report import Report
 
-from yaml import load, dump
+from yaml import load
 try:
-	from yaml import CLoader as Loader, CDumper as Dumper
+	from yaml import CLoader as Loader
 except ImportError:
-	from yaml import Loader, Dumper
+	from yaml import Loader
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
@@ -71,9 +71,9 @@ class Progress(object):
 		self.ignore_projects = ignore_projects
 		self.team_members = set(team_members)
 		self.asana_api_key = asana_api_key
-		self.output = output.keys()
+		self.output = output
 		self.verbose = args.verbose
-		self.dryrun = True	#args.dry_run
+		self.dryrun = True  # args.dry_run
 		self.time_frame = time_frame
 		self.format_choices = ['wiki', 'email']
 		self.frequency_choices = ['weekly', 'monthly']
@@ -84,29 +84,11 @@ class Progress(object):
 		self.start_date = None
 		self.end_date = None
 		self.set_time_frame()
-		#self.dt = self.max_age()
-		self.init_report_class(output, args)
-		self.api = pyasana.Api(self.asana_api_key)
+		# self.dt = self.max_age()
+		# self.init_report_class(output, args)
+		self.api = pyasana.Api(self.asana_api_key, 100)
 		self.workspaces = self.api.get_workspaces()
 
-	def init_report_class(self, output, args):
-		count = len(self.output)
-		classes = 0
-		for op in self.output:
-			for cls in Report.__subclasses__():
-				if cls.is_registrar_for(op):
-					params = output.get(op)
-					params['args'] = args
-					params['output'] = op
-					params['start_date'] = self.start_date
-					params['end_date'] = self.end_date
-					cls = cls(**params)
-					setattr(self, op, cls)
-					classes += 1
-		if classes != count:
-			raise ValueError('Could not find all classes to handle output format(s) %s.' % ','.join(self.output))
-			sys.exit(-1)
-	
 	def generate_key(self, start_date, end_date):
 		if not isinstance(start_date, date) or not isinstance(end_date, date):
 			raise Exception('start and end date should be of type date not datetime.')
@@ -135,7 +117,7 @@ class Progress(object):
 		for number in xrange(self.number_report):
 			number += 1
 			start_date, end_date = self.construct_time_window(number=number)
-			#key = self.generate_key(start_date, end_date)
+			# key = self.generate_key(start_date, end_date)
 			self.tasks.setdefault(start_date, {})
 
 	def task_finished_during_time_window(self, task):
@@ -204,10 +186,9 @@ class Progress(object):
 								self.tasks[date].setdefault(project, [])
 								self.tasks[date][project].append(completed_task)
 
-	def send(self):
-		for output in self.output:
-			report = getattr(self, output)
-			report.create(self)
+	def create_reports(self):
+		report = Report(self.tasks, self.start_date, self.end_date, self.output, self.frequency, self.verbose, self.dryrun)
+		report.create_statuses()
 
 	def validate_input(self):
 		for output in self.output:
@@ -219,22 +200,21 @@ class Progress(object):
 				sys.exit(-1)
 
 	
-def flatten(input_dictionary, output_dictionary={}):
-	for key, value in input_dictionary.iteritems():
-		if type(value) == dict:
-			output_dictionary = flatten(value, output_dictionary)
-		else:				
-			output_dictionary[key] = value
-	return output_dictionary
+# def flatten(input_dictionary, output_dictionary={}):
+# 	for key, value in input_dictionary.iteritems():
+# 		if type(value) == dict:
+# 			output_dictionary = flatten(value, output_dictionary)
+# 		else:				
+# 			output_dictionary[key] = value
+# 	return output_dictionary
 
 
 def parse_commandline():
 	parser = argparse.ArgumentParser(description='Welcome to asana-stats. The default location for the config.yaml file is ~/.asana-stats.yaml, you can specify an alternative location using the --config option.')
 	parser.add_argument('--config', help='Specify the absolute path to tell asana-stats where it can find the config.yaml file', action='store', required=False, default='~/.asana-stats.yaml')
 	parser.add_argument('--dry_run', help='This won\'t distribute the status update, primarily for debugging purposes', required=False, default=False, action='store_true')
-	parser.add_argument('--verbose', help='Indicate whether to stdout should be turned on.', action='store_true', default=False)
+	parser.add_argument('--verbose', help='Indicate whether logging to stdout should be turned on.', action='store_true', default=False)
 	parser.add_argument('--number_reports', help='Indicate how far back in time you want to go for generating reports. ', default=1, required=False, action='store')
-	
 	return parser.parse_args()
 
 
@@ -260,14 +240,15 @@ def main():
 		settings = configuration.get('reports', {}).get(report)
 		if settings:
 			log.info('Creating report %s' % report)
-			settings['output']['email'] = flatten(settings['output'].get('email', {}))
+			settings['output']['email'] = settings['output'].get('email', {})
 			settings['output']['wiki'] = settings['output'].get('wiki', {})
 			settings['asana_api_key'] = configuration.get('asana_api_key')
 			settings['args'] = args
 			progress = Progress(**settings)
 			progress.run() 
-			progress.send()
+			progress.create_reports()
 			log.info('Finished creating report %s' % report)
 	
 if __name__ == '__main__':
+
 	main()
